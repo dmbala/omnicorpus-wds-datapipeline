@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=js2imgs
+#SBATCH --partition=shared,sapphire
+#SBATCH --account=kempner_dev
+#SBATCH --output=logs/js2pair_%A_%a.out
+#SBATCH --error=logs/js2pair_%A_%a.err
+#SBATCH --time=72:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
+#SBATCH --array=0-9999         # cluster MaxArraySize=10000; override per-chunk at submission
+
+set -euo pipefail
+
+JSON_SHARD_LIST=${JSON_SHARD_LIST:-"../data/json_shards_remaining.txt"}
+PAIRS_ROOT="/n/holylfs06/LABS/kempner_shared/Everyone/testbed/multimodal/OmniCorpus/webdataset_images"
+SCRIPT="./json_to_pair_wds_ip.py"
+
+MAX_IMAGES_PER_DOC=40
+MAX_SAMPLES_PER_SHARD=10000
+
+mkdir -p logs
+mkdir -p "$PAIRS_ROOT"
+
+module load python/3.12.11-fasrc02
+mamba activate /n/holylfs06/LABS/kempner_shared/Everyone/common_envs/imgdl
+
+
+OFFSET=${OFFSET:-0}
+TASK_ID=$(( OFFSET + ${SLURM_ARRAY_TASK_ID:-0} ))
+NUM_LINES=$(wc -l < "$JSON_SHARD_LIST")
+if (( TASK_ID >= NUM_LINES )); then
+  echo "[WARN] TASK_ID=$TASK_ID >= NUM_LINES=$NUM_LINES, nothing to do."
+  exit 0
+fi
+
+INPUT_SHARD=$(sed -n "$((TASK_ID + 1))p" "$JSON_SHARD_LIST" | tr -d '\r')
+if [[ -z "${INPUT_SHARD//[[:space:]]/}" ]]; then
+  echo "[WARN] Empty line at index $TASK_ID (line $((TASK_ID + 1))) in $JSON_SHARD_LIST, skipping."
+  exit 0
+fi
+BASENAME=$(basename "$INPUT_SHARD")       # e.g. CC-MAIN-2013-20-000000.tar
+SNAPSHOT=$(basename "$(dirname "$INPUT_SHARD")")   # e.g. CC-MAIN-2013-20
+
+OUT_DIR="$PAIRS_ROOT/$SNAPSHOT"
+mkdir -p "$OUT_DIR"
+
+echo "[ARRAY] Task $TASK_ID:"
+echo "        INPUT_SHARD  = $INPUT_SHARD"
+echo "        SNAPSHOT     = $SNAPSHOT"
+echo "        OUT_DIR      = $OUT_DIR"
+
+########################################
+# OPTION 1: exactly one output tar per input shard
+########################################
+# output pattern has NO '%'; script will use TarWriter
+#OUTPUT_SHARD="$OUT_DIR/$BASENAME"
+
+########################################
+# OPTION 2: allow multiple shards per input shard (UNCOMMENT to use)
+########################################
+OUTPUT_SHARD="$OUT_DIR/${BASENAME%.tar}-%01d.tar"
+MAX_SAMPLES_PER_SHARD=10000    # for example
+
+echo "        OUTPUT_SHARD = $OUTPUT_SHARD"
+
+start_ts=$(date -Ins)
+start_sec=$SECONDS
+
+python "$SCRIPT" \
+  --input-shard "$INPUT_SHARD" \
+  --output-shard "$OUTPUT_SHARD" \
+  --max-samples-per-shard "$MAX_SAMPLES_PER_SHARD" \
+  --max-images-per-doc "$MAX_IMAGES_PER_DOC"
+
+end_ts=$(date -Ins)
+elapsed=$((SECONDS - start_sec))
+hours=$(awk -v s="$elapsed" 'BEGIN { printf "%.2f", s/3600 }')
+mins=$(awk -v s="$elapsed" 'BEGIN { printf "%.1f", s/60 }')
+
+echo "[TIME] start:   $start_ts"
+echo "[TIME] end:     $end_ts"
+echo "[TIME] elapsed: ${elapsed}s (~${mins} min, ~${hours} hours)"
+
+

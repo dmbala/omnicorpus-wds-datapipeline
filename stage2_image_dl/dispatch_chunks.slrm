@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=chunkdispatch
+#SBATCH --partition=unrestricted
+#SBATCH --account=kempner_dev
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=1G
+#SBATCH --time=94-00:00:00
+#SBATCH --output=chunk-logs/chunkdispatch_%j.out
+#SBATCH --error=chunk-logs/chunkdispatch_%j.err
+
+set -euo pipefail
+
+mkdir -p logs
+
+chmod +x submit_chunks.sh dispatch_chunks.sh
+
+# Dispatcher settings:
+# - chunk=1000 keeps each submission small (helps with MaxSubmitJobs)
+# - max-active=10000 means submit the next 1000-task chunk when >=1000 array slots are free
+# - maxrun=10 matches your worker array concurrency
+./dispatch_chunks.sh --chunk 1000 --max-active 10000 --maxrun 1000 --poll-secs 300 --list ../data/json_shards_remaining.txt

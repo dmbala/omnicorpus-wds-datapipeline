@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=omni_wds
+#SBATCH --partition=kempner_dev
+#SBATCH --account=kempner_dev
+#SBATCH --output=logs/omni_wds_%A_%a.out
+#SBATCH --error=logs/omni_wds_%A_%a.err
+#SBATCH --time=72:00:00
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16G
+#SBATCH --array=0-93   # update to 0-$(($(wc -l < ../data/subdirs.txt) - 1)) after re-running get_file_list.sh
+
+set -euo pipefail
+
+mkdir -p logs
+
+module load python/3.12.11-fasrc02
+mamba activate /n/holylfs06/LABS/kempner_shared/Everyone/common_envs/imgdl
+
+# Paths
+INPUT_ROOT="/n/holylfs06/LABS/kempner_shared/Everyone/testbed/multimodal/OmniCorpus/raw"
+OUTPUT_ROOT="/n/holylfs06/LABS/kempner_shared/Everyone/testbed/multimodal/OmniCorpus/webdataset_shards"
+SUBDIR_LIST="../data/subdirs.txt"
+SCRIPT="./make_shards_single_dir.py"
+
+# Optional limits per subdir ("" means no limit)
+MAX_PARQUET_PER_SUBDIR=       # e.g. 10
+MAX_SAMPLES_PER_SHARD=10000
+
+# Determine which line to read based on SLURM_ARRAY_TASK_ID
+TASK_ID=${SLURM_ARRAY_TASK_ID:-0}
+
+# Safety: confirm the line exists
+NUM_LINES=$(wc -l < "$SUBDIR_LIST")
+if (( TASK_ID >= NUM_LINES )); then
+  echo "[WARN] TASK_ID=$TASK_ID >= NUM_LINES=$NUM_LINES, nothing to do."
+  exit 0
+fi
+
+INPUT_DIR=$(sed -n "$((TASK_ID + 1))p" "$SUBDIR_LIST")
+NAME=$(basename "$INPUT_DIR")
+OUTPUT_DIR="$OUTPUT_ROOT/$NAME"
+
+mkdir -p "$OUTPUT_DIR"
+echo "[ARRAY] Task $TASK_ID processing: $INPUT_DIR -> $OUTPUT_DIR"
+
+python "$SCRIPT" \
+  --input-dir "$INPUT_DIR" \
+  --output-dir "$OUTPUT_DIR" \
+  ${MAX_PARQUET_PER_SUBDIR:+--max-parquet "$MAX_PARQUET_PER_SUBDIR"} \
+  ${MAX_SAMPLES_PER_SHARD:+--max-samples-per-shard "$MAX_SAMPLES_PER_SHARD"}
